@@ -24,7 +24,7 @@ class xbee(object):
                 self.init_with_packet(arg)
        
         def init_with_packet(self, p):
-                p = [ord(c) for c in p]
+                #p = [ord(c) for c in p]
 
                 #print p
                 #print len(p)

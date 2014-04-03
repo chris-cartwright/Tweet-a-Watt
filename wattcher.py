@@ -1,35 +1,19 @@
 #!/usr/bin/env python
-import serial, time, datetime, sys
+import serial, time, datetime, sys, binascii
 from xbee import xbee
 import sensorhistory
-
-# use App Engine? or log file? comment out next line if appengine
-LOGFILENAME = "powerdatalog.csv"   # where we will store our flatfile data
-
-SERIALPORT = "COM4"    # the com/serial port the XBee is connected to
-BAUDRATE = 9600      # the baud rate we talk to the xbee
-CURRENTSENSE = 4       # which XBee ADC has current draw data
-VOLTSENSE = 0          # which XBee ADC has mains voltage data
-MAINSVPP = 170 * 2     # +-170V is what 120Vrms ends up being (= 120*2sqrt(2))
-vrefcalibration = [492,  # Calibration for sensor #0
-                   498,  # Calibration for sensor #1
-                   489,  # Calibration for sensor #2
-                   492,  # Calibration for sensor #3
-                   501,  # Calibration for sensor #4
-                   493]  # etc... approx ((2.4v * (10Ko/14.7Ko)) / 3
-CURRENTNORM = 15.5  # conversion to amperes from ADC
-NUMWATTDATASAMPLES = 1800 # how many samples to watch in the plot window, 1 hr @ 2s samples
+from settings import Settings
 
 # open up the FTDI serial port to get data transmitted to xbee
-ser = serial.Serial(SERIALPORT, BAUDRATE)
+ser = serial.Serial(Settings.SERIALPORT(), Settings.BAUDRATE())
 
 # open our datalogging file
 logfile = None
 try:
-    logfile = open(LOGFILENAME, 'r+')
+    logfile = open(Settings.LOGFILENAME(), 'r+')
 except IOError:
     # didn't exist yet
-    logfile = open(LOGFILENAME, 'w+')
+    logfile = open(Settings.LOGFILENAME(), 'w+')
     logfile.write("#Date, time, sensornum, avgWatts\n");
     logfile.flush()
             
@@ -37,10 +21,10 @@ DEBUG = False
 if (sys.argv and len(sys.argv) > 1):
     if sys.argv[1] == "-d":
         DEBUG = True
-#print DEBUG
+#print(DEBUG)
 
 sensorhistories = sensorhistory.SensorHistories(logfile)
-print sensorhistories
+print(sensorhistories)
 
 # the 'main loop' runs once a second or so
 def update_graph(idleevent):
@@ -50,11 +34,14 @@ def update_graph(idleevent):
     packet = xbee.find_packet(ser)
     if not packet:
         return        # we timedout
+		
+    if DEBUG:
+        print(packet)
     
     xb = xbee(packet)             # parse the packet
-    #print xb.address_16
+    #print(xb.address_16)
     if DEBUG:       # for debugging sometimes we only want one
-        print xb
+        print(xb)
         
     # we'll only store n-1 samples since the first one is usually messed up
     voltagedata = [-1] * (len(xb.analog_samples) - 1)
@@ -62,12 +49,12 @@ def update_graph(idleevent):
     # grab 1 thru n of the ADC readings, referencing the ADC constants
     # and store them in nice little arrays
     for i in range(len(voltagedata)):
-        voltagedata[i] = xb.analog_samples[i+1][VOLTSENSE]
-        ampdata[i] = xb.analog_samples[i+1][CURRENTSENSE]
+        voltagedata[i] = xb.analog_samples[i+1][Settings.VOLTSENSE()]
+        ampdata[i] = xb.analog_samples[i+1][Settings.CURRENTSENSE()]
 
     if DEBUG:
-        print "ampdata: "+str(ampdata)
-        print "voltdata: "+str(voltagedata)
+        print("ampdata: "+str(ampdata))
+        print("voltdata: "+str(voltagedata))
 		
     # get max and min voltage and normalize the curve to '0'
     # to make the graph 'AC coupled' / signed
@@ -88,23 +75,23 @@ def update_graph(idleevent):
         #remove 'dc bias', which we call the average read
         voltagedata[i] -= avgv
         # We know that the mains voltage is 120Vrms = +-170Vpp
-        voltagedata[i] = (voltagedata[i] * MAINSVPP) / vpp
+        voltagedata[i] = (voltagedata[i] * Settings.MAINSVPP()) / vpp
 
     # normalize current readings to amperes
     for i in range(len(ampdata)):
         # VREF is the hardcoded 'DC bias' value, its
         # about 492 but would be nice if we could somehow
         # get this data once in a while maybe using xbeeAPI
-        if vrefcalibration[xb.address_16]:
-            ampdata[i] -= vrefcalibration[xb.address_16]
+        if Settings.VREFCALIBRATION()[xb.address_16]:
+            ampdata[i] -= Settings.VREFCALIBRATION()[xb.address_16]
         else:
-            ampdata[i] -= vrefcalibration[0]
+            ampdata[i] -= Settings.VREFCALIBRATION()[0]
         # the CURRENTNORM is our normalizing constant
         # that converts the ADC reading to Amperes
-        ampdata[i] /= CURRENTNORM
+        ampdata[i] /= Settings.CURRENTNORM()
 
-    #print "Voltage, in volts: ", voltagedata
-    #print "Current, in amps:  ", ampdata
+    #print("Voltage, in volts: ", voltagedata)
+    #print("Current, in amps:  ", ampdata)
 
     # calculate instant. watts, by multiplying V*I for each sample point
     wattdata = [0] * len(voltagedata)
@@ -129,22 +116,22 @@ def update_graph(idleevent):
     avgwatt /= 17.0
 
     # Print out our most recent measurements
-    print str(xb.address_16)+"\tCurrent draw, in amperes: "+str(avgamp)
-    print "\tWatt draw, in VA: "+str(avgwatt)
+    print(str(xb.address_16)+"\tCurrent draw, in amperes: "+str(avgamp))
+    print("\tWatt draw, in VA: "+str(avgwatt))
 
     if (avgamp > 13):
         return            # hmm, bad data
 
 		# retreive the history for this sensor
     sensorhistory = sensorhistories.find(xb.address_16)
-    #print sensorhistory
+    #print(sensorhistory)
     
     # add up the delta-watthr used since last reading
     # Figure out how many watt hours were used since last reading
     elapsedseconds = time.time() - sensorhistory.lasttime
     dwatthr = (avgwatt * elapsedseconds) / (60.0 * 60.0)  # 60 seconds in 60 minutes = 1 hr
     sensorhistory.lasttime = time.time()
-    print "\t\tWh used in last ",elapsedseconds," seconds: ",dwatthr
+    print("\t\tWh used in last ",elapsedseconds," seconds: ",dwatthr)
     sensorhistory.addwatthr(dwatthr)
     
     # Determine the minute of the hour (ie 6:42 -> '42')
@@ -155,19 +142,19 @@ def update_graph(idleevent):
         ):
         # Print out debug data, Wh used in last 5 minutes
         avgwattsused = sensorhistory.avgwattover5min()
-        print time.strftime("%Y %m %d, %H:%M")+", "+str(sensorhistory.sensornum)+", "+str(sensorhistory.avgwattover5min())+"\n"
+        print(time.strftime("%Y %m %d, %H:%M")+", "+str(sensorhistory.sensornum)+", "+str(sensorhistory.avgwattover5min())+"\n")
                
         # Lets log it! Seek to the end of our log file
-		logfile.seek(0, 2) # 2 == SEEK_END. ie, go to the end of the file
-		logfile.write(time.strftime("%Y %m %d, %H:%M")+", "+
-					  str(sensorhistory.sensornum)+", "+
-					  str(sensorhistory.avgwattover5min())+"\n")
-		logfile.flush()
+        logfile.seek(0, 2) # 2 == SEEK_END. ie, go to the end of the file
+        logfile.write(time.strftime("%Y %m %d, %H:%M")+", "+
+                      str(sensorhistory.sensornum)+", "+
+                      str(sensorhistory.avgwattover5min())+"\n")
+        logfile.flush()
         
         # Reset our 5 minute timer
         sensorhistory.reset5mintimer()
         
-if __module__ == "__main__":
+if __name__ == "__main__":
     while True:
         update_graph(None)
 
