@@ -1,7 +1,7 @@
     
 class Settings(object):
     def LOGFILENAME():
-        return "powerdatalog.csv"   # where we will store our flatfile data
+        return "usage.db"   # where we will store our flatfile data
 
     def SERIALPORT():
         return "COM4"    # the com/serial port the XBee is connected to
@@ -19,8 +19,8 @@ class Settings(object):
         return 170 * 2     # +-170V is what 120Vrms ends up being (= 120*2sqrt(2))
     
     def VREFCALIBRATION():
-        return [492,  # Calibration for sensor #0
-                498,  # Calibration for sensor #1
+        return [483,  # Calibration for sensor #0
+                483,  # Calibration for sensor #1
                 489,  # Calibration for sensor #2
                 492,  # Calibration for sensor #3
                 501,  # Calibration for sensor #4

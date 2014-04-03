@@ -1,27 +1,37 @@
 #!/usr/bin/env python
-import serial, time, datetime, sys, binascii
+import serial, time, datetime, sys, binascii, sqlite3
 from xbee import xbee
 import sensorhistory
 from settings import Settings
 
-# open up the FTDI serial port to get data transmitted to xbee
-ser = serial.Serial(Settings.SERIALPORT(), Settings.BAUDRATE())
-
-# open our datalogging file
-logfile = None
-try:
-    logfile = open(Settings.LOGFILENAME(), 'r+')
-except IOError:
-    # didn't exist yet
-    logfile = open(Settings.LOGFILENAME(), 'w+')
-    logfile.write("#Date, time, sensornum, avgWatts\n");
-    logfile.flush()
-            
 DEBUG = False
 if (sys.argv and len(sys.argv) > 1):
     if sys.argv[1] == "-d":
         DEBUG = True
 #print(DEBUG)
+
+# open up the FTDI serial port to get data transmitted to xbee
+ser = serial.Serial(Settings.SERIALPORT(), Settings.BAUDRATE())
+
+# open our datalogging file
+db = sqlite3.connect(Settings.LOGFILENAME())
+
+logfile = db.cursor()
+
+logfile.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Tracker'")
+if logfile.fetchone() == None:
+    if DEBUG:
+        print("Creating table.")
+	
+    logfile.execute("""
+CREATE TABLE "Tracker" (
+    "TimeStamp" TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "SensorNumber" INTEGER NOT NULL,
+    "Amps" DECIMAL(7,3) NOT NULL,
+    "Volts" DECIMAL(7,3) NOT NULL,
+	"WattHours" DECIMAL(7,3) NOT NULL
+)
+""")
 
 sensorhistories = sensorhistory.SensorHistories(logfile)
 print(sensorhistories)
@@ -106,6 +116,15 @@ def update_graph(idleevent):
         avgamp += abs(ampdata[i])
 		
     avgamp /= 17.0
+	
+    # sum up the current drawn over one 1/60hz cycle
+    avgvolt = 0
+    # 16.6 samples per second, one cycle = ~17 samples
+    # close enough for govt work :(
+    for i in range(17):
+        avgvolt += abs(voltagedata[i])
+		
+    avgvolt /= 17.0
 
     # sum up power drawn over one 1/60hz cycle
     avgwatt = 0
@@ -133,6 +152,11 @@ def update_graph(idleevent):
     sensorhistory.lasttime = time.time()
     print("\t\tWh used in last ",elapsedseconds," seconds: ",dwatthr)
     sensorhistory.addwatthr(dwatthr)
+	
+    db.execute("insert into Tracker(SensorNumber, Amps, Volts, WattHours) values(?, ?, ?, ?)",
+        (xb.address_16, avgamp, avgvolt, dwatthr)
+    )
+    db.commit()
     
     # Determine the minute of the hour (ie 6:42 -> '42')
     currminute = (int(time.time())/60) % 10
@@ -143,13 +167,6 @@ def update_graph(idleevent):
         # Print out debug data, Wh used in last 5 minutes
         avgwattsused = sensorhistory.avgwattover5min()
         print(time.strftime("%Y %m %d, %H:%M")+", "+str(sensorhistory.sensornum)+", "+str(sensorhistory.avgwattover5min())+"\n")
-               
-        # Lets log it! Seek to the end of our log file
-        logfile.seek(0, 2) # 2 == SEEK_END. ie, go to the end of the file
-        logfile.write(time.strftime("%Y %m %d, %H:%M")+", "+
-                      str(sensorhistory.sensornum)+", "+
-                      str(sensorhistory.avgwattover5min())+"\n")
-        logfile.flush()
         
         # Reset our 5 minute timer
         sensorhistory.reset5mintimer()
@@ -157,4 +174,3 @@ def update_graph(idleevent):
 if __name__ == "__main__":
     while True:
         update_graph(None)
-
