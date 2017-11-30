@@ -1,6 +1,7 @@
 #!/usr/bin/env python
-import serial, time, datetime, sys, binascii, sqlite3
+import serial, time, datetime, sys, binascii
 from xbee import xbee
+from influxdb import InfluxDBClient
 import sensorhistory
 from settings import Settings
 
@@ -13,32 +14,11 @@ if (sys.argv and len(sys.argv) > 1):
 # open up the FTDI serial port to get data transmitted to xbee
 ser = serial.Serial(Settings.SERIALPORT(), Settings.BAUDRATE())
 
-# open our datalogging file
-db = sqlite3.connect(Settings.LOGFILENAME())
-
-logfile = db.cursor()
-
-logfile.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Tracker'")
-if logfile.fetchone() == None:
-    if DEBUG:
-        print("Creating table.")
-	
-    logfile.execute("""
-CREATE TABLE "Tracker" (
-    "TimeStamp" TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    "SensorNumber" INTEGER NOT NULL,
-    "Amps" DECIMAL(7,3) NOT NULL,
-    "Volts" DECIMAL(7,3) NOT NULL,
-	"WattHours" DECIMAL(7,3) NOT NULL
-)
-""")
-
-sensorhistories = sensorhistory.SensorHistories(logfile)
-print(sensorhistories)
+sensorhistories = sensorhistory.SensorHistories()
 
 # the 'main loop' runs once a second or so
 def update_graph(idleevent):
-    global avgwattdataidx, sensorhistories, twittertimer, DEBUG
+    global avgwattdataidx, sensorhistories, DEBUG
      
     # grab one packet from the xbee, or timeout
     packet = xbee.find_packet(ser)
@@ -134,14 +114,15 @@ def update_graph(idleevent):
 		
     avgwatt /= 17.0
 
-    # Print out our most recent measurements
-    print(str(xb.address_16)+"\tCurrent draw, in amperes: "+str(avgamp))
-    print("\tWatt draw, in VA: "+str(avgwatt))
+    if DEBUG:
+        # Print out our most recent measurements
+        print(str(xb.address_16)+"\tCurrent draw, in amperes: "+str(avgamp))
+        print("\tWatt draw, in VA: "+str(avgwatt))
 
     if (avgamp > 13):
         return            # hmm, bad data
 
-		# retreive the history for this sensor
+	# retreive the history for this sensor
     sensorhistory = sensorhistories.find(xb.address_16)
     #print(sensorhistory)
     
@@ -150,13 +131,23 @@ def update_graph(idleevent):
     elapsedseconds = time.time() - sensorhistory.lasttime
     dwatthr = (avgwatt * elapsedseconds) / (60.0 * 60.0)  # 60 seconds in 60 minutes = 1 hr
     sensorhistory.lasttime = time.time()
-    print("\t\tWh used in last ",elapsedseconds," seconds: ",dwatthr)
+    if DEBUG:
+        print("\t\tWh used in last ",elapsedseconds," seconds: ",dwatthr)
+
     sensorhistory.addwatthr(dwatthr)
-	
-    db.execute("insert into Tracker(SensorNumber, Amps, Volts, WattHours) values(?, ?, ?, ?)",
-        (xb.address_16, avgamp, avgvolt, dwatthr)
-    )
-    db.commit()
+    
+    influx = InfluxDBClient(Settings.INFLUX_HOST(), 8086, database='Tweet-a-Watt')
+    influx.write_points([{
+        'measurement': 'usage',
+        'tags': {
+            'sensor': xb.address_16
+        },
+        'fields': {
+            'Amps': avgamp,
+            'Volts': avgvolt,
+            'WattHours': dwatthr
+        }
+    }])
     
     # Determine the minute of the hour (ie 6:42 -> '42')
     currminute = (int(time.time())/60) % 10
@@ -166,7 +157,9 @@ def update_graph(idleevent):
         ):
         # Print out debug data, Wh used in last 5 minutes
         avgwattsused = sensorhistory.avgwattover5min()
-        print(time.strftime("%Y %m %d, %H:%M")+", "+str(sensorhistory.sensornum)+", "+str(sensorhistory.avgwattover5min())+"\n")
+
+        if DEBUG:
+            print(time.strftime("%Y %m %d, %H:%M")+", "+str(sensorhistory.sensornum)+", "+str(sensorhistory.avgwattover5min())+"\n")
         
         # Reset our 5 minute timer
         sensorhistory.reset5mintimer()
