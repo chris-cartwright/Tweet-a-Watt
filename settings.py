@@ -4,7 +4,7 @@ class Settings(object):
         return "192.168.38.160"  # Host running InfluxDB
 
     def SERIALPORT():
-        return "COM5"    # the com/serial port the XBee is connected to
+        return "/dev/ttyUSB0"    # the com/serial port the XBee is connected to
     
     def BAUDRATE():
         return 9600      # the baud rate we talk to the xbee
